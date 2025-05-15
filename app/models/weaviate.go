@@ -11,6 +11,7 @@ import (
 	"zendesk_weaviate/app/config"
 
 	"github.com/weaviate/weaviate-go-client/v4/weaviate"
+	"github.com/weaviate/weaviate-go-client/v4/weaviate/filters"
 	"github.com/weaviate/weaviate-go-client/v4/weaviate/graphql"
 	"github.com/weaviate/weaviate/entities/models"
 )
@@ -88,12 +89,127 @@ func HybridTicketQueryWeaviate(client *weaviate.Client, query, collectionName st
 	return nil
 }
 
-func HybridArticleQueryWeaviate(client *weaviate.Client, query, collectionName string, ctx context.Context) error {
+func HybridTicketClusterQueryWeaviate(client *weaviate.Client, query, collectionName string, ctx context.Context) error {
 	startConfigClient := time.Now()
 	graphqlQuery := client.GraphQL().HybridArgumentBuilder().
 		WithQuery(query).
 		WithAlpha(0.5).
-		WithProperties([]string{"content"})
+		WithProperties([]string{"description"})
+
+	log.Println("Hybrid query:", graphqlQuery)
+
+	delayConfigClient := time.Since(startConfigClient)
+	startSearch := time.Now()
+	result, err := client.GraphQL().Get().
+		WithClassName(collectionName).
+		WithFields(
+			graphql.Field{Name: "ticket_id"},
+			graphql.Field{Name: "composant"},
+			graphql.Field{Name: "description"},
+			graphql.Field{Name: "direct_reason"},
+			graphql.Field{Name: "direct_reason_option"},
+			graphql.Field{
+				Name: "_additional",
+				Fields: []graphql.Field{
+					{Name: "score"},
+				},
+			},
+		).
+		WithHybrid(graphqlQuery).
+		WithLimit(5).
+		Do(ctx)
+	delaySearch := time.Since(startSearch)
+
+	if err != nil {
+		return fmt.Errorf("query execution failed: %w", err)
+	}
+
+	startParsing := time.Now()
+	tickets, _ := result.Data["Get"].(map[string]interface{})[collectionName].([]interface{})
+	fmt.Printf("query : %s\n", query)
+
+	for _, ticket := range tickets {
+		ticketData := ticket.(map[string]interface{})
+		id := ticketData["ticket_id"].(float64)
+		fmt.Printf("Ticket-ID: %v, Description : %s, Direct reason : %s, Score %v\n",
+			int(id),
+			ticketData["description"],
+			ticketData["direct_reason"],
+			ticketData["_additional"].(map[string]interface{})["score"])
+	}
+
+	delayParsing := time.Since(startParsing)
+
+	CountObjectsInClass(collectionName, client)
+	fmt.Printf("Number of tickets found : %v \n", len(tickets))
+	fmt.Printf("Config client time : %v\n", delayConfigClient)
+	fmt.Printf("Search time : %v\n", delaySearch)
+	fmt.Printf("Parsing time : %v\n", delayParsing)
+
+	return nil
+}
+
+func HybridArticleQueryWeaviate(client *weaviate.Client, query, collectionName string, ctx context.Context, language string, sources []string, categories []string, sections []string) error {
+	startConfigClient := time.Now()
+
+	// Normalize language format
+	if language == "en" {
+		language = "en-us"
+	}
+
+	// Define filters
+	whereFilter := filters.Where().
+		WithPath([]string{"locales"}).
+		WithOperator(filters.Equal).
+		WithValueText(language)
+
+	// Add sources filter
+	if len(sources) > 0 {
+		sourceFilter := filters.Where().
+			WithPath([]string{"source"}).
+			WithOperator(filters.ContainsAny).
+			WithValueString(sources...)
+
+		whereFilter = filters.Where().
+			WithOperator(filters.And).
+			WithOperands([]*filters.WhereBuilder{whereFilter, sourceFilter})
+	}
+
+	// Add sections filter
+	if len(sections) > 0 {
+		sectionFilter := filters.Where().
+			WithPath([]string{"section"}).
+			WithOperator(filters.ContainsAny).
+			WithValueString(sections...)
+
+		whereFilter = filters.Where().
+			WithOperator(filters.And).
+			WithOperands([]*filters.WhereBuilder{whereFilter, sectionFilter})
+	}
+
+	// Add categories filter
+	if len(categories) > 0 {
+		categoryFilter := filters.Where().
+			WithPath([]string{"category"}).
+			WithOperator(filters.ContainsAny).
+			WithValueString(categories...)
+
+		whereFilter = filters.Where().
+			WithOperator(filters.And).
+			WithOperands([]*filters.WhereBuilder{whereFilter, categoryFilter})
+	}
+
+	// where := filters.Where().
+	// 	WithPath([]string{"content"}).
+	// 	WithOperator(filters.Equal).
+	// 	WithValueString("Alaskan") // All results must have "Alaskan" in the content property
+
+	graphqlQuery := client.GraphQL().HybridArgumentBuilder().
+		WithQuery(query).
+		WithAlpha(0.9).
+		WithMaxVectorDistance(0.4).
+		WithFusionType(graphql.RelativeScore).
+		WithProperties([]string{"content", "title"})
 
 	log.Println("Hybrid query:", graphqlQuery)
 
@@ -105,6 +221,8 @@ func HybridArticleQueryWeaviate(client *weaviate.Client, query, collectionName s
 			graphql.Field{Name: "article_id"},
 			graphql.Field{Name: "title"},
 			graphql.Field{Name: "source"},
+			graphql.Field{Name: "category"},
+			graphql.Field{Name: "locales"},
 			graphql.Field{
 				Name: "_additional",
 				Fields: []graphql.Field{
@@ -113,7 +231,8 @@ func HybridArticleQueryWeaviate(client *weaviate.Client, query, collectionName s
 			},
 		).
 		WithHybrid(graphqlQuery).
-		WithLimit(5).
+		WithWhere(whereFilter).
+		WithLimit(3).
 		Do(ctx)
 	delaySearch := time.Since(startSearch)
 
@@ -133,6 +252,7 @@ func HybridArticleQueryWeaviate(client *weaviate.Client, query, collectionName s
 			articleData["title"],
 			articleData["source"],
 			articleData["_additional"].(map[string]interface{})["score"])
+		fmt.Println("")
 	}
 
 	delayParsing := time.Since(startParsing)
@@ -201,7 +321,7 @@ func EnsureTicketClassExists(ctx context.Context, client *weaviate.Client, class
 			"summary_vector": {
 				VectorIndexType: "hnsw",
 				Vectorizer: map[string]interface{}{
-					"text2vec-openai": map[string]interface{}{
+					"text2vec-ringover": map[string]interface{}{
 						"sourceProperties": []string{"summary"},
 						"model":            config.GetConfig().Embeddings.Model,
 						"base_url":         config.GetConfig().Embeddings.Host,
@@ -277,6 +397,101 @@ func EnsureTicketClassExists(ctx context.Context, client *weaviate.Client, class
 	return nil
 }
 
+func EnsureTicketClusterClassExists(ctx context.Context, client *weaviate.Client, className string) error {
+	// Verify if the class already exists
+	existingClasses, err := client.Schema().Getter().Do(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to get schemas : %w", err)
+	}
+
+	for _, class := range existingClasses.Classes {
+		if class.Class == className {
+			log.Printf("Found class %s", className)
+			return nil
+		}
+	}
+
+	log.Printf("The class '%s' does not exist. Creating...", className)
+
+	indexInverted := true
+
+	log.Println("Creating class with host and adding baseUrl : ", config.GetConfig().Embeddings.Host)
+	// Define the new schema
+	newClass := &models.Class{
+		Class:       className,
+		Description: "A collection of solved tickets",
+		VectorConfig: map[string]models.VectorConfig{
+			"summary_vector": {
+				VectorIndexType: "hnsw",
+				Vectorizer: map[string]interface{}{
+					"text2vec-ringover": map[string]interface{}{
+						"sourceProperties": []string{"description"},
+						"model":            config.GetConfig().Embeddings.Model,
+						"base_url":         config.GetConfig().Embeddings.Host,
+						"baseUrl":          config.GetConfig().Embeddings.Host,
+						"dimensions":       3584,
+					},
+				},
+			},
+		},
+		Properties: []*models.Property{
+			{
+				Name:          "ticket_id",
+				Description:   "ID of the ticket",
+				DataType:      []string{"int"},
+				IndexInverted: &indexInverted,
+			},
+			{
+				Name:          "description",
+				Description:   "Description is the first comment of the ticket",
+				DataType:      []string{"text"},
+				IndexInverted: &indexInverted,
+			},
+			{
+				Name:          "composant",
+				Description:   "Composant of the ticket",
+				DataType:      []string{"string"},
+				IndexInverted: &indexInverted,
+			},
+			{
+				Name:          "direct_reason",
+				Description:   "Direct reason of the ticket",
+				DataType:      []string{"string"},
+				IndexInverted: &indexInverted,
+			},
+			{
+				Name:          "direct_reason_option",
+				Description:   "Direct reason option of ticket",
+				DataType:      []string{"string"},
+				IndexInverted: &indexInverted,
+			},
+			{
+				Name:          "status",
+				Description:   "Status of the ticket",
+				DataType:      []string{"string"},
+				IndexInverted: &indexInverted,
+			},
+		},
+	}
+
+	// Create the new schema
+	err = client.Schema().ClassCreator().WithClass(newClass).Do(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to create class '%s' : %w", className, err)
+	}
+
+	// Retrieve schema to confirm creation
+	schema, err := client.Schema().Getter().Do(ctx)
+	if err != nil {
+		log.Fatalf("Error retrieving schema: %v", err)
+	}
+
+	log.Printf("Connection successful! Available classes: %+v\n", schema.Classes)
+
+	log.Printf("The class '%s' was created successfully.", className)
+	return nil
+}
+
 func EnsureArticleClassExists(ctx context.Context, client *weaviate.Client, className string) error {
 	// Verify if the class already exists
 	existingClasses, err := client.Schema().Getter().Do(ctx)
@@ -303,12 +518,13 @@ func EnsureArticleClassExists(ctx context.Context, client *weaviate.Client, clas
 			"content_vector": {
 				VectorIndexType: "hnsw",
 				Vectorizer: map[string]interface{}{
-					"text2vec-openai": map[string]interface{}{
-						"sourceProperties": []string{"content"},
-						"model":            config.GetConfig().Embeddings.Model,
-						"base_url":         config.GetConfig().Embeddings.Host,
-						"baseUrl":          config.GetConfig().Embeddings.Host,
-						"dimensions":       3584,
+					"text2vec-ringover": map[string]interface{}{
+						"sourceProperties":   []string{"content"},
+						"model":              config.GetConfig().Embeddings.Model,
+						"base_url":           config.GetConfig().Embeddings.Host,
+						"baseUrl":            config.GetConfig().Embeddings.Host,
+						"dimensions":         3584,
+						"vectorizeClassName": false,
 					},
 				},
 			},

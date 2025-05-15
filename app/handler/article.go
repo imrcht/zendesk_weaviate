@@ -25,7 +25,8 @@ func ImportArticles(client *weaviate.Client, className string, ctx context.Conte
 	log.Println("All sections: ", allSectionNames)
 
 	for _, section := range sections {
-		fmt.Println("Found section :>>", section["section_name"])
+		fmt.Printf("Found section %s of category %s\n", section["section_name"], section["category_name"])
+		fmt.Println()
 
 		// if section["section_name"] != "Messaging" {
 		// 	continue
@@ -100,7 +101,7 @@ func ImportArticles(client *weaviate.Client, className string, ctx context.Conte
 					// log.Println("article_id :>> ", article["id"])
 					// log.Println("section :>> ", article["section"])
 					// log.Println("category :>> ", article["category"])
-					// log.Println("category in seciont :>> ", section["category_name"])
+					// log.Println("category in section :>> ", section["category_name"])
 					// log.Println("chunk_id :>> ", chunkID)
 					// log.Println("prevchunk_id :>> ", prevChunkID)
 					// log.Println("postchunk_id :>> ", postChunkID)
@@ -136,7 +137,7 @@ func ImportArticles(client *weaviate.Client, className string, ctx context.Conte
 }
 
 func CreateArticleClassAndImportArticles(client *weaviate.Client, zendeskAccessToken, zendeskSubdomain string, ctx context.Context) error {
-	className := "Zendesk_article_test5"
+	className := "Zendesk_articles_2"
 	app_models.DropClass(className, ctx, client)
 
 	if err := app_models.EnsureArticleClassExists(ctx, client, className); err != nil {

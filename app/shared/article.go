@@ -11,6 +11,7 @@ import (
 	"zendesk_weaviate/app/models"
 
 	"github.com/PuerkitoBio/goquery"
+	"go.uber.org/zap"
 )
 
 func HtmlToPlainText(html string) (string, error) {
@@ -149,10 +150,11 @@ func FetchSections(zendeskAccessToken, zendeskSubdomain string) ([]map[string]st
 
 		for _, s := range sections {
 			section := s.(map[string]interface{})
+			categoryID := strconv.Itoa(int(section["category_id"].(float64)))
 			allSections = append(allSections, models.Section{
 				ID:         int64(section["id"].(float64)),
 				Name:       section["name"].(string),
-				CategoryID: fmt.Sprintf("%v", section["category_id"]),
+				CategoryID: categoryID,
 			})
 		}
 
@@ -174,19 +176,23 @@ func FetchSections(zendeskAccessToken, zendeskSubdomain string) ([]map[string]st
 	// Create a map of category IDs to names
 	categoryMap := make(map[string]string)
 	for _, category := range allCategories {
-		string_category_id := strconv.Itoa(int(category.ID))
-		categoryMap[string_category_id] = category.Name
+		stringCategoryID := strconv.Itoa(int(category.ID))
+		categoryMap[stringCategoryID] = category.Name
 	}
+
+	// fmt.Println("category map: ", zap.Any("categoryMap", categoryMap))
 
 	// Prepare the final data
 	data := []map[string]string{}
 	for _, section := range allSections {
-		string_section_id := strconv.Itoa(int(section.ID))
+		fmt.Println("section: ", zap.Any("section", section))
+		stringSectionID := strconv.Itoa(int(section.ID))
+		stringCategoryID := section.CategoryID
 		data = append(data, map[string]string{
-			"section_id":    string_section_id,
+			"section_id":    stringSectionID,
 			"section_name":  section.Name,
 			"category_id":   section.CategoryID,
-			"category_name": categoryMap[section.CategoryID],
+			"category_name": categoryMap[stringCategoryID],
 		})
 	}
 

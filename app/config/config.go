@@ -12,6 +12,9 @@ type Config struct {
 		Name    string `mapstructure:"name"`
 		Version string `mapstructure:"version"`
 	} `mapstructure:"app"`
+	Openai struct {
+		ApiKey string `mapstructure:"api_key"`
+	}
 	Embeddings struct {
 		ApiType       string `mapstructure:"api_type"`
 		Host          string `mapstructure:"host"`
