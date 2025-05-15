@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"zendesk_weaviate/app/config"
-	"zendesk_weaviate/app/handler"
 	app_models "zendesk_weaviate/app/models"
 
 	"github.com/weaviate/weaviate-go-client/v4/weaviate"
@@ -85,11 +84,11 @@ func main() {
 	// }
 
 	//  Create ticket cluster class and import ticket clusters on that class
-	err = handler.CreateTicketClusterClassAndImportTickets(client, ctx)
-	if err != nil {
-		log.Println("[Error] while running ticket class script:", err)
-		fmt.Printf("error when running ticket class script %v", err)
-	}
+	// err = handler.CreateTicketClusterClassAndImportTickets(client, ctx)
+	// if err != nil {
+	// 	log.Println("[Error] while running ticket class script:", err)
+	// 	fmt.Printf("error when running ticket class script %v", err)
+	// }
 
 	// Create article class and import articles on that class
 	// err := handler.CreateArticleClassAndImportArticles(client, zendeskAccessToken, zendeskSubdomain, ctx)
